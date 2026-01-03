@@ -4,19 +4,19 @@ import math
 from stupidArtnet.StupidArtnet import StupidArtnet
 
 # --- USER CONFIG ---
-# IP address of the DMX receiver (e.g., an Art-Net node or lighting console)
-TARGET_IP = '10.0.1.95' 
-
-# Number of universes (0-indexed, so 4 means universes 0, 1, 2, 3)
+TARGET_IP = '10.0.1.95'
 UNIVERSE_COUNT = 4
-# RGBWAUV
 COMPONENTS_PER_LED = 6
-# 18 Leds per light strip
 LED_COUNT_PER_STRIP = 18
-# 3 strips per universe
 LED_STRIPS_PER_UNIVERSE = 3
-# The size of the DMX packet (usually 512 channels)
 PACKET_SIZE = COMPONENTS_PER_LED * LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE
+
+# Brightness (0.0 to 1.0)
+BRIGHTNESS = 0.25
+
+# Effect timing
+EFFECT_DURATION = 15.0  # seconds per effect
+CROSSFADE_DURATION = 3.0  # seconds to crossfade between effects
 # --- END USER CONFIG ---
 
 # Create StupidArtnet instances for each universe
@@ -31,12 +31,21 @@ print(f"Sending Art-Net to {TARGET_IP} Universes 0-{UNIVERSE_COUNT - 1}...")
 # RGBWAUV channel indices
 CH_R, CH_G, CH_B, CH_W, CH_A, CH_UV = 0, 1, 2, 3, 4, 5
 
-def make_color(color):
+def make_color(color, brightness=None):
     """Create a 6-byte RGBWAUV color from a list/tuple of 6 values."""
+    if brightness is None:
+        brightness = BRIGHTNESS
     b = bytearray(6)
     for i, v in enumerate(color):
-        b[i] = int(v)
+        b[i] = int(max(0, min(255, v * brightness)))
     return b
+
+def blend_frames(frame1, frame2, t):
+    """Blend two frames together. t=0 means frame1, t=1 means frame2."""
+    result = bytearray(len(frame1))
+    for i in range(len(frame1)):
+        result[i] = int(lerp(frame1[i], frame2[i], t))
+    return result
 
 def lerp(a, b, t):
     """Linear interpolation between a and b by factor t (0.0 to 1.0)."""
@@ -97,27 +106,156 @@ def gradient_color(gradient_stops, progress):
 
 # --- EFFECT DEFINITIONS ---
 
-# Flame color palette: dark red -> red -> amber -> yellow-green (flame tip)
+def effect_noise(led_index, t, speed=1.0, scale=0.7):
+    """Generic smooth noise for effects."""
+    phase = led_index * scale
+    value = (noise1d(t * speed + phase) + 1.0) / 2.0
+    return max(0.0, min(1.0, value))
+
+
+# 1. FLAME - warm flickering fire
 FLAME_COLORS = [
-    [40, 0, 0, 0, 0, 0],       # Dark red (low flame)
-    [255, 0, 0, 0, 80, 0],     # Red + some amber
-    [255, 30, 0, 0, 200, 0],   # Red + green hint + amber (mid flame)
-    [200, 80, 0, 0, 255, 0],   # More green + full amber (hot)
-    [150, 120, 0, 0, 255, 0],  # Green-yellow + amber (flame tip)
+    [40, 0, 0, 0, 0, 0],
+    [255, 0, 0, 0, 80, 0],
+    [255, 30, 0, 0, 200, 0],
+    [200, 80, 0, 0, 255, 0],
+    [150, 120, 0, 0, 255, 0],
 ]
 
-def get_flame_color(intensity):
-    """Map intensity (0.0-1.0) to flame color."""
-    return gradient_color(FLAME_COLORS, intensity)
-
-def generate_flame_frame(total_leds, t):
-    """Generate a full frame of flame effect for all LEDs."""
+def generate_flame(total_leds, t):
     result = bytearray()
     for i in range(total_leds):
-        intensity = flame_noise(i, t)
-        color = get_flame_color(intensity)
+        intensity = flame_noise(i, t, speed=3.0, flicker=2.0)
+        color = gradient_color(FLAME_COLORS, intensity)
         result += make_color(color)
     return result
+
+
+# 2. OCEAN - deep blue waves
+OCEAN_COLORS = [
+    [0, 0, 40, 0, 0, 30],      # Deep blue + hint UV
+    [0, 20, 100, 0, 0, 60],    # Mid blue
+    [0, 60, 180, 0, 0, 40],    # Brighter blue-teal
+    [0, 100, 200, 40, 0, 20],  # Light blue + white hint
+    [0, 60, 150, 0, 0, 50],    # Back to mid
+]
+
+def generate_ocean(total_leds, t):
+    result = bytearray()
+    for i in range(total_leds):
+        # Slow rolling waves
+        wave = (math.sin(t * 0.5 + i * 0.3) + 1) / 2
+        ripple = (noise1d(t * 1.5 + i * 0.5) + 1) / 2
+        intensity = wave * 0.7 + ripple * 0.3
+        color = gradient_color(OCEAN_COLORS, intensity)
+        result += make_color(color)
+    return result
+
+
+# 3. AURORA - northern lights
+AURORA_COLORS = [
+    [0, 80, 40, 0, 0, 60],     # Teal + UV
+    [0, 200, 100, 0, 0, 100],  # Green + UV
+    [40, 150, 200, 0, 0, 150], # Cyan + UV
+    [100, 50, 200, 0, 0, 200], # Purple + UV
+    [0, 180, 80, 0, 0, 80],    # Back to green
+]
+
+def generate_aurora(total_leds, t):
+    result = bytearray()
+    for i in range(total_leds):
+        # Flowing curtain effect
+        flow = (math.sin(t * 0.3 + i * 0.15) + 1) / 2
+        shimmer = (noise1d(t * 2.0 + i * 0.8) + 1) / 2
+        intensity = flow * 0.6 + shimmer * 0.4
+        # Add some brightness variation
+        brightness_mod = 0.5 + shimmer * 0.5
+        color = gradient_color(AURORA_COLORS, intensity)
+        color = [c * brightness_mod for c in color]
+        result += make_color(color)
+    return result
+
+
+# 4. BREATHING - slow hypnotic pulse
+BREATHING_COLORS = [
+    [20, 0, 30, 0, 0, 40],     # Dark purple
+    [60, 0, 100, 0, 20, 80],   # Purple + amber hint
+    [100, 0, 150, 20, 40, 120],# Brighter purple
+    [60, 0, 100, 0, 20, 80],   # Back down
+]
+
+def generate_breathing(total_leds, t):
+    result = bytearray()
+    # Global breathing cycle
+    breath = (math.sin(t * 0.4) + 1) / 2
+    breath = smoothstep(breath)  # Smoother curve
+
+    for i in range(total_leds):
+        # Slight variation per LED
+        offset = noise1d(i * 0.3) * 0.15
+        intensity = max(0, min(1, breath + offset))
+        color = gradient_color(BREATHING_COLORS, intensity)
+        result += make_color(color)
+    return result
+
+
+# 5. THUNDERSTORM - dark moody with occasional flashes
+STORM_COLORS = [
+    [0, 0, 20, 0, 0, 10],      # Very dark blue
+    [0, 0, 40, 0, 0, 20],      # Dark blue
+    [0, 0, 60, 10, 0, 30],     # Slightly brighter
+]
+
+def generate_thunderstorm(total_leds, t):
+    result = bytearray()
+
+    # Background rumble
+    for i in range(total_leds):
+        rumble = (noise1d(t * 0.8 + i * 0.4) + 1) / 2
+        intensity = rumble * 0.5
+        color = gradient_color(STORM_COLORS, intensity)
+
+        # Random lightning flashes
+        flash_chance = noise1d(t * 15 + i * 0.1)
+        if flash_chance > 0.97:
+            # Bright white flash
+            flash_intensity = (flash_chance - 0.97) / 0.03
+            color = lerp_color(color, [200, 200, 255, 255, 100, 150], flash_intensity)
+
+        result += make_color(color)
+    return result
+
+
+# 6. LAVA - slow moving deep reds
+LAVA_COLORS = [
+    [30, 0, 0, 0, 0, 0],       # Dark red
+    [100, 0, 0, 0, 30, 0],     # Red + amber hint
+    [180, 20, 0, 0, 80, 0],    # Bright red-orange
+    [255, 60, 0, 0, 150, 0],   # Hot orange
+    [200, 30, 0, 0, 100, 0],   # Back to red
+]
+
+def generate_lava(total_leds, t):
+    result = bytearray()
+    for i in range(total_leds):
+        # Very slow flow
+        flow = (math.sin(t * 0.2 + i * 0.25) + 1) / 2
+        bubble = (noise1d(t * 0.8 + i * 0.6) + 1) / 2
+        intensity = flow * 0.5 + bubble * 0.5
+        color = gradient_color(LAVA_COLORS, intensity)
+        result += make_color(color)
+    return result
+
+
+# Effect registry
+EFFECTS = [
+    ("Flame", generate_flame),
+    ("Ocean", generate_ocean),
+    ("Aurora", generate_aurora),
+    ("Breathing", generate_breathing),
+    ("Thunderstorm", generate_thunderstorm),
+    ("Lava", generate_lava),
+]
 
 
 # --- SCENE DEFINITIONS ---
@@ -182,47 +320,46 @@ SCENES = {
     ),
 }
 
-# --- ACTIVE EFFECT ---
-ACTIVE_EFFECT = "flame"  # Options: "flame", "scenes"
-
-# Scene playback settings (for "scenes" effect)
-SCENE_DURATION = 5.0  # seconds per scene
-scene_list = list(SCENES.values())
-
+# --- MAIN LOOP ---
 try:
     start_time = time.time()
     leds_per_universe = LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE
     total_leds = leds_per_universe * UNIVERSE_COUNT
+    cycle_duration = EFFECT_DURATION + CROSSFADE_DURATION
 
-    print(f"Running effect: {ACTIVE_EFFECT}")
+    print(f"Running {len(EFFECTS)} effects with {CROSSFADE_DURATION}s crossfade...")
+    for name, _ in EFFECTS:
+        print(f"  - {name}")
 
     while True:
         t = time.time() - start_time
 
-        if ACTIVE_EFFECT == "flame":
-            # Generate flame effect for all LEDs across all universes
-            frame = generate_flame_frame(total_leds, t)
+        # Determine current and next effect
+        cycle_position = t % (len(EFFECTS) * cycle_duration)
+        effect_index = int(cycle_position // cycle_duration)
+        time_in_cycle = cycle_position % cycle_duration
 
-            # Split frame into per-universe chunks and send
-            for u, artnet in enumerate(universes):
-                start = u * leds_per_universe * COMPONENTS_PER_LED
-                end = start + leds_per_universe * COMPONENTS_PER_LED
-                artnet.set(frame[start:end])
+        current_effect_name, current_effect_fn = EFFECTS[effect_index]
+        next_effect_name, next_effect_fn = EFFECTS[(effect_index + 1) % len(EFFECTS)]
 
-        else:  # scenes
-            scene_index = int(t // SCENE_DURATION) % len(scene_list)
-            current_scene = scene_list[scene_index]
-            progress = (t % SCENE_DURATION) / SCENE_DURATION
-            current_color = current_scene.get_color(progress)
-            led_bytes = make_color(current_color)
+        # Generate current effect frame
+        frame = current_effect_fn(total_leds, t)
 
-            for artnet in universes:
-                result = bytearray()
-                for i in range(leds_per_universe):
-                    result += led_bytes
-                artnet.set(result)
+        # Check if we're in crossfade period
+        if time_in_cycle > EFFECT_DURATION:
+            # We're crossfading to next effect
+            fade_progress = (time_in_cycle - EFFECT_DURATION) / CROSSFADE_DURATION
+            fade_progress = smoothstep(fade_progress)  # Smooth the transition
+            next_frame = next_effect_fn(total_leds, t)
+            frame = blend_frames(frame, next_frame, fade_progress)
 
-        time.sleep(0.016)  # ~60Hz update rate for smoother animation
+        # Split frame into per-universe chunks and send
+        for u, artnet in enumerate(universes):
+            start_idx = u * leds_per_universe * COMPONENTS_PER_LED
+            end_idx = start_idx + leds_per_universe * COMPONENTS_PER_LED
+            artnet.set(frame[start_idx:end_idx])
+
+        time.sleep(0.016)  # ~60Hz update rate
 
 except KeyboardInterrupt:
     # Handle user interruption (Ctrl+C) gracefully
