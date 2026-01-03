@@ -6,8 +6,8 @@ from stupidArtnet.StupidArtnet import StupidArtnet
 # IP address of the DMX receiver (e.g., an Art-Net node or lighting console)
 TARGET_IP = '10.0.1.95' 
 
-# The universe number to send data to (0-indexed)
-UNIVERSE = 0
+# Number of universes (0-indexed, so 4 means universes 0, 1, 2, 3)
+UNIVERSE_COUNT = 4
 # RGBWAUV
 COMPONENTS_PER_LED = 6
 # 18 Leds per light strip
@@ -18,13 +18,13 @@ LED_STRIPS_PER_UNIVERSE = 3
 PACKET_SIZE = COMPONENTS_PER_LED * LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE
 # --- END USER CONFIG ---
 
-# Create a StupidArtnet instance
-a = StupidArtnet(TARGET_IP, UNIVERSE, PACKET_SIZE)
-
-# Start the persistent sending thread
-# This sends the current buffer repeatedly at a high frequency (around 30Hz)
-a.start() 
-print(f"Sending Art-Net to {TARGET_IP} Universe {UNIVERSE}...")
+# Create StupidArtnet instances for each universe
+universes = []
+for u in range(UNIVERSE_COUNT):
+    artnet = StupidArtnet(TARGET_IP, u, PACKET_SIZE)
+    artnet.start()
+    universes.append(artnet)
+print(f"Sending Art-Net to {TARGET_IP} Universes 0-{UNIVERSE_COUNT - 1}...")
 
 def make_amber(fader=None):
     # RGBWAUV format: R=0, G=1, B=2, W=3, A=4, UV=5
@@ -68,16 +68,14 @@ try:
         #     packet[i] = random.randint(0, 255)
         # a.set(packet)
 
-        result = bytearray()
-        for i in range(LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE):
-            result = result + make_amber(fader=True)
+        # Build and send data for each universe
+        for u, artnet in enumerate(universes):
+            result = bytearray()
+            for i in range(LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE):
+                result = result + make_amber(fader=True)
+            artnet.set(result)
 
-        # Update the internal buffer (the thread will send this new data)
-        print(f"len={len(result)}, first 12 bytes: {list(result[:12])}")
-        # Expected RGBWAUV: [0,1,2,3,4,5] = [R,G,B,W,A,UV]
-        # With 4-byte prefix, first fixture starts at index 4
-        # So amber (index 4 in fixture) should be at raw index 8
-        a.set(result)
+        print(f"Sent to {UNIVERSE_COUNT} universes, len={len(result)}, first 12 bytes: {list(result[:12])}")
         
         # Wait for a short duration before sending the next random values
         time.sleep(0.25)
@@ -87,8 +85,9 @@ except KeyboardInterrupt:
     print("Stopping Art-Net sender.")
 
 finally:
-    # It is crucial to clean up and stop the thread when done
+    # It is crucial to clean up and stop the threads when done
     print("Blackout and stop.")
-    a.blackout() # Optional: sends a packet with all zeros
-    a.stop()
-    del a
+    for artnet in universes:
+        artnet.blackout()
+        artnet.stop()
+    universes.clear()
