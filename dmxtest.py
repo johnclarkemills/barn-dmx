@@ -5,10 +5,17 @@ from stupidArtnet.StupidArtnet import StupidArtnet
 # --- USER CONFIG ---
 # IP address of the DMX receiver (e.g., an Art-Net node or lighting console)
 TARGET_IP = '10.0.1.95' 
+
 # The universe number to send data to (0-indexed)
 UNIVERSE = 0
+# RGBWAUV
+COMPONENTS_PER_LED = 6
+# 18 Leds per light strip
+LED_COUNT_PER_STRIP = 18
+# 3 strips per universe
+LED_STRIPS_PER_UNIVERSE = 3
 # The size of the DMX packet (usually 512 channels)
-PACKET_SIZE = 192  # 32 fixtures × 6 channels (RGBWUVA)
+PACKET_SIZE = COMPONENTS_PER_LED * LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE
 # --- END USER CONFIG ---
 
 # Create a StupidArtnet instance
@@ -50,8 +57,6 @@ def make_amber(fader=None):
 # packet[110] = 255     # amber
 # packet[111] = 0       # violet
 
-
-
 try:
     # Example loop to continuously modify and send data
     for x in range(100):
@@ -64,7 +69,7 @@ try:
         # a.set(packet)
 
         result = bytearray()
-        for i in range(32):
+        for i in range(LED_COUNT_PER_STRIP * LED_STRIPS_PER_UNIVERSE):
             result = result + make_amber(fader=True)
 
         # Update the internal buffer (the thread will send this new data)
