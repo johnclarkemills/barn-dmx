@@ -8,8 +8,7 @@ TARGET_IP = '10.0.1.95'
 # The universe number to send data to (0-indexed)
 UNIVERSE = 0
 # The size of the DMX packet (usually 512 channels)
-PACKET_SIZE = 112
-PACKET_SIZE = 196
+PACKET_SIZE = 192  # 32 fixtures × 6 channels (RGBWUVA)
 # --- END USER CONFIG ---
 
 # Create a StupidArtnet instance
@@ -21,6 +20,7 @@ a.start()
 print(f"Sending Art-Net to {TARGET_IP} Universe {UNIVERSE}...")
 
 def make_amber(fader=None):
+    # RGBWAUV format: R=0, G=1, B=2, W=3, A=4, UV=5
     b = bytearray(6)
     if fader:
         b[4] = random.randint(160, 255)
@@ -63,12 +63,15 @@ try:
         #     packet[i] = random.randint(0, 255)
         # a.set(packet)
 
-        result = bytearray(4)
+        result = bytearray()
         for i in range(32):
             result = result + make_amber(fader=True)
 
         # Update the internal buffer (the thread will send this new data)
-        print(len(result))
+        print(f"len={len(result)}, first 12 bytes: {list(result[:12])}")
+        # Expected RGBWAUV: [0,1,2,3,4,5] = [R,G,B,W,A,UV]
+        # With 4-byte prefix, first fixture starts at index 4
+        # So amber (index 4 in fixture) should be at raw index 8
         a.set(result)
         
         # Wait for a short duration before sending the next random values
